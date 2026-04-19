@@ -15,6 +15,9 @@ def main() -> int:
     kind = "postgres" if url.startswith(("postgres://", "postgresql://")) else "sqlite"
     host = url.split("@")[-1].split("/")[0] if "@" in url else "(local)"
     print(f"[db_check] backend={kind} host={host}")
+    for k in ("TEST_REF_NEWDB", "TEST_REF_NEWHOST"):
+        v = os.environ.get(k, "<unset>")
+        print(f"[db_check] {k} len={len(v) if v != '<unset>' else 'unset'} preview={(v[:15] + '...' if len(v) > 18 else v)!r}")
 
     engine = get_engine()
     with engine.connect() as conn:
