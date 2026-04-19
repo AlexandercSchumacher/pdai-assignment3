@@ -14,7 +14,8 @@ def main() -> int:
     url = os.environ.get("DATABASE_URL", "").strip()
     kind = "postgres" if url.startswith(("postgres://", "postgresql://")) else "sqlite"
     host = url.split("@")[-1].split("/")[0] if "@" in url else "(local)"
-    print(f"[db_check] backend={kind} host={host}")
+    raw_preview = url[:10] + "..." + url[-10:] if len(url) > 25 else url
+    print(f"[db_check] backend={kind} host={host} raw_preview={raw_preview!r} env_len={len(url)}")
 
     engine = get_engine()
     with engine.connect() as conn:
