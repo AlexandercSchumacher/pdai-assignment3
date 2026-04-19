@@ -9,6 +9,14 @@ import plotly.graph_objects as go
 import streamlit as st
 from dotenv import load_dotenv
 
+from src.components import (
+    metric_card,
+    r2_chip,
+    render_card,
+    residual_histogram_svg,
+    risk_chip,
+    sparkline,
+)
 from src.data_load import load_personal_data
 from src.database import (
     add_experiment,
@@ -114,6 +122,60 @@ st.markdown("""
         padding-top: 1rem;
         margin-top: 2rem;
     }
+
+    /* Custom metric card (A3) */
+    .metric-card {
+        background: #f8f9fc;
+        border: 1px solid #e1e5eb;
+        border-radius: 10px;
+        padding: 12px 14px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+        min-height: 104px;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-start;
+        gap: 4px;
+    }
+    .metric-card .metric-label {
+        font-size: 0.78rem;
+        color: #5a6577;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+    }
+    .metric-card .metric-value {
+        font-size: 1.6rem;
+        font-weight: 700;
+        color: #0f3460;
+        line-height: 1.1;
+    }
+    .metric-card .metric-sparkline {
+        margin-top: 2px;
+    }
+    .metric-card .metric-delta {
+        font-size: 0.78rem;
+        font-weight: 600;
+        margin-top: 2px;
+    }
+    .metric-delta-up { color: #2e7d32; }
+    .metric-delta-down { color: #c62828; }
+    .metric-delta-neutral { color: #5a6577; }
+    .metric-card .metric-note {
+        font-size: 0.72rem;
+        color: #8b94a3;
+        margin-top: 1px;
+    }
+    .risk-chip {
+        display: inline-block;
+        padding: 3px 12px;
+        border-radius: 14px;
+        color: white;
+        font-weight: 700;
+        font-size: 0.95rem;
+        line-height: 1.4;
+    }
+    .risk-low { background: #2e7d32; }
+    .risk-medium { background: #ed6c02; }
+    .risk-high { background: #c62828; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -522,11 +584,51 @@ def app() -> None:
 
         if not comparison.empty:
             day1 = comparison.iloc[0]
+            baseline_series = comparison["median_baseline"].tolist()
+            scenario_series = comparison["median_scenario"].tolist()
+            delta_value = float(day1["delta_median"])
+            risk_level = str(scenario_forecast.iloc[0]["risk"])
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Day 1 Delta", f"{day1['delta_median']:+.1f}")
-            c2.metric("Day 1 Baseline", f"{day1['median_baseline']:.1f}")
-            c3.metric("Day 1 Scenario", f"{day1['median_scenario']:.1f}")
-            c4.metric("Risk (Day 1)", f"{scenario_forecast.iloc[0]['risk']}")
+            render_card(
+                c1,
+                metric_card(
+                    "Day 1 Delta",
+                    f"{delta_value:+.1f}",
+                    delta=delta_value,
+                    delta_label="vs baseline",
+                    extra_note="scenario − baseline",
+                ),
+            )
+            render_card(
+                c2,
+                metric_card(
+                    "Day 1 Baseline",
+                    f"{day1['median_baseline']:.1f}",
+                    sparkline_svg=sparkline(baseline_series),
+                    extra_note="3-day baseline median",
+                ),
+            )
+            render_card(
+                c3,
+                metric_card(
+                    "Day 1 Scenario",
+                    f"{day1['median_scenario']:.1f}",
+                    delta=delta_value,
+                    delta_label="vs baseline",
+                    sparkline_svg=sparkline(
+                        scenario_series, baseline_values=baseline_series
+                    ),
+                ),
+            )
+            render_card(
+                c4,
+                metric_card(
+                    "Risk (Day 1)",
+                    risk_chip(risk_level),
+                    value_is_html=True,
+                    extra_note="p10 band classification",
+                ),
+            )
 
         display_df = comparison[[
             "day", "date", "median_baseline", "median_scenario",
@@ -1204,10 +1306,36 @@ def app() -> None:
 
         if metadata.get("metrics"):
             metrics = metadata["metrics"]
+            residuals = model_bundle.get("residuals", []) or []
+            residual_hist = residual_histogram_svg(residuals)
             c1, c2, c3 = st.columns(3)
-            c1.metric("MAE", f"{metrics['mae']:.2f}")
-            c2.metric("RMSE", f"{metrics['rmse']:.2f}")
-            c3.metric("R2", f"{metrics['r2']:.3f}")
+            render_card(
+                c1,
+                metric_card(
+                    "MAE",
+                    f"{metrics['mae']:.2f}",
+                    sparkline_svg=residual_hist,
+                    extra_note="residual distribution · lower is better",
+                ),
+            )
+            render_card(
+                c2,
+                metric_card(
+                    "RMSE",
+                    f"{metrics['rmse']:.2f}",
+                    sparkline_svg=residual_hist,
+                    extra_note="residual distribution · lower is better",
+                ),
+            )
+            render_card(
+                c3,
+                metric_card(
+                    "R²",
+                    r2_chip(float(metrics["r2"])),
+                    value_is_html=True,
+                    extra_note="green ≥ 0.5 · amber 0–0.5 · red < 0",
+                ),
+            )
 
         with st.expander("Data and Mapping Assumptions"):
             if load_info.get("assumptions"):
