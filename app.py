@@ -9,6 +9,8 @@ import plotly.graph_objects as go
 import streamlit as st
 from dotenv import load_dotenv
 
+from streamlit.components.v1 import html as components_html
+
 from src.components import (
     metric_card,
     r2_chip,
@@ -285,6 +287,287 @@ def init_session_state() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Spotlight tour (auto-starts on every page load, dismissible)
+# ---------------------------------------------------------------------------
+
+
+_TOUR_STEPS_JSON = json.dumps([
+    {
+        "selector": None,
+        "tabName": None,
+        "title": "Welcome to your Personal Energy Forecast Planner",
+        "body": (
+            "A 30-second walkthrough of the main sections. Use Prev / Next to navigate, "
+            "or click Dismiss any time to exit."
+        ),
+    },
+    {
+        "selector": 'section[data-testid="stSidebar"]',
+        "tabName": None,
+        "title": "Sidebar: your Scenario Builder",
+        "body": (
+            "Pick a date range, set target bedtime and wake-up, adjust training load "
+            "and caffeine cutoff, toggle alcohol or a late meal, then click Apply "
+            "scenario. Every tab recomputes instantly."
+        ),
+    },
+    {
+        "selector": 'div[data-baseweb="tab-list"]',
+        "tabName": None,
+        "title": "The six tabs",
+        "body": (
+            "Forecast, Smart Scenario (LLM parser), AI Optimizer (agent loop), "
+            "Experiment Log (RAG), Validation, and Drivers."
+        ),
+    },
+    {
+        "selector": 'div[data-testid="stPlotlyChart"]',
+        "tabName": "Forecast",
+        "title": "Forecast chart",
+        "body": (
+            "Baseline vs scenario forecast with p10 to p90 uncertainty bands. The "
+            "four metric cards below show Day-1 delta, baseline, scenario median and "
+            "a risk chip."
+        ),
+    },
+    {
+        "selector": 'textarea',
+        "tabName": "Smart Scenario",
+        "title": "Feature A: Smart Scenario",
+        "body": (
+            "Describe your upcoming days in plain English. An LLM extracts all "
+            "scenario parameters with reasoning and pre-fills the sidebar for you."
+        ),
+    },
+    {
+        "selector": 'input[type="text"]',
+        "tabName": "AI Optimizer",
+        "title": "Feature B: AI Optimizer",
+        "body": (
+            "State a goal (e.g. 'peak energy on Day 2'). A multi-call agent loop "
+            "searches parameter combinations and returns the best scenario it found."
+        ),
+    },
+    {
+        "selector": None,
+        "tabName": None,
+        "title": "You're set",
+        "body": (
+            "Three tabs left to explore on your own: Experiment Log (RAG over your "
+            "own history), Validation (predicted vs actual accuracy), and Drivers "
+            "(feature importance). Click Done to close."
+        ),
+    },
+])
+
+
+def render_spotlight_tour() -> None:
+    """Inject a JS spotlight tour into the parent document.
+
+    Runs once per browser tab: a `window.__energyTourInit` guard on the parent
+    prevents re-initialization when Streamlit reruns (which remounts the iframe).
+    A hard browser refresh clears the guard and the tour starts fresh.
+    """
+    html = """
+<script>
+(function() {
+  const pwin = window.parent;
+  const pdoc = pwin.document;
+  if (pwin.__energyTourInit) return;
+  pwin.__energyTourInit = true;
+
+  const steps = __STEPS__;
+
+  const style = pdoc.createElement('style');
+  style.id = 'energy-tour-style';
+  style.textContent = `
+    #energy-tour-cutout {
+      position: fixed;
+      border-radius: 8px;
+      box-shadow: 0 0 0 9999px rgba(15, 26, 50, 0.68);
+      transition: top .25s ease, left .25s ease, width .25s ease, height .25s ease;
+      pointer-events: none;
+      z-index: 2147483646;
+    }
+    #energy-tour-cutout.centered {
+      box-shadow: none;
+      background: rgba(15, 26, 50, 0.68);
+      top: 0; left: 0; width: 100vw; height: 100vh;
+      border-radius: 0;
+    }
+    #energy-tour-tooltip {
+      position: fixed;
+      background: #ffffff;
+      color: #1a1a2e;
+      padding: 18px 22px;
+      border-radius: 10px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.35);
+      width: 380px;
+      max-width: calc(100vw - 32px);
+      z-index: 2147483647;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      border-left: 4px solid #e94560;
+    }
+    #energy-tour-tooltip .et-counter {
+      font-size: 0.72rem; color: #e94560; font-weight: 700;
+      letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 4px;
+    }
+    #energy-tour-tooltip .et-title {
+      font-size: 1.1rem; font-weight: 700; color: #0f3460; margin-bottom: 8px;
+    }
+    #energy-tour-tooltip .et-body {
+      font-size: 0.9rem; line-height: 1.5; color: #3b4251; margin-bottom: 14px;
+    }
+    #energy-tour-tooltip .et-nav {
+      display: flex; gap: 8px; align-items: center;
+    }
+    #energy-tour-tooltip button {
+      border: 1px solid #d6dde9; background: #f8f9fc;
+      padding: 6px 14px; border-radius: 6px; font-weight: 600;
+      cursor: pointer; font-size: 0.88rem; color: #0f3460;
+    }
+    #energy-tour-tooltip button.primary {
+      background: #0f3460; color: #ffffff; border-color: #0f3460;
+    }
+    #energy-tour-tooltip button.text {
+      background: transparent; border: none; color: #8b94a3; margin-left: auto;
+    }
+    #energy-tour-tooltip button:disabled {
+      opacity: 0.4; cursor: default;
+    }
+  `;
+  pdoc.head.appendChild(style);
+
+  const cutout = pdoc.createElement('div');
+  cutout.id = 'energy-tour-cutout';
+  pdoc.body.appendChild(cutout);
+
+  const tt = pdoc.createElement('div');
+  tt.id = 'energy-tour-tooltip';
+  pdoc.body.appendChild(tt);
+
+  let idx = 0;
+
+  function visible(sel) {
+    return Array.from(pdoc.querySelectorAll(sel)).find(el => el.offsetParent !== null);
+  }
+  function clickTab(name) {
+    const btn = Array.from(pdoc.querySelectorAll('button[role="tab"]'))
+      .find(b => b.textContent.trim() === name);
+    if (btn && btn.getAttribute('aria-selected') !== 'true') {
+      btn.click();
+      return true;
+    }
+    return false;
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[c]));
+  }
+
+  function positionAt(target) {
+    cutout.classList.remove('centered');
+    const r = target.getBoundingClientRect();
+    const pad = 6;
+    cutout.style.top = (r.top - pad) + 'px';
+    cutout.style.left = (r.left - pad) + 'px';
+    cutout.style.width = (r.width + 2 * pad) + 'px';
+    cutout.style.height = (r.height + 2 * pad) + 'px';
+
+    const ttW = 380, ttH = tt.offsetHeight || 180;
+    const vw = pwin.innerWidth, vh = pwin.innerHeight;
+    let ttLeft, ttTop;
+    if (r.bottom + 16 + ttH < vh) {
+      ttTop = r.bottom + 16;
+      ttLeft = Math.max(16, Math.min(vw - ttW - 16, r.left + r.width / 2 - ttW / 2));
+    } else if (r.top - 16 - ttH > 0) {
+      ttTop = r.top - 16 - ttH;
+      ttLeft = Math.max(16, Math.min(vw - ttW - 16, r.left + r.width / 2 - ttW / 2));
+    } else if (r.right + 16 + ttW < vw) {
+      ttLeft = r.right + 16;
+      ttTop = Math.max(16, Math.min(vh - ttH - 16, r.top + r.height / 2 - ttH / 2));
+    } else {
+      ttLeft = Math.max(16, r.left - ttW - 16);
+      ttTop = Math.max(16, Math.min(vh - ttH - 16, r.top + r.height / 2 - ttH / 2));
+    }
+    tt.style.top = ttTop + 'px';
+    tt.style.left = ttLeft + 'px';
+  }
+
+  function positionCentered() {
+    cutout.classList.add('centered');
+    const vw = pwin.innerWidth, vh = pwin.innerHeight;
+    const ttW = 380, ttH = tt.offsetHeight || 200;
+    tt.style.left = Math.max(16, vw / 2 - ttW / 2) + 'px';
+    tt.style.top = Math.max(16, vh / 2 - ttH / 2) + 'px';
+  }
+
+  function renderTooltip(step) {
+    const isFirst = idx === 0;
+    const isLast = idx === steps.length - 1;
+    tt.innerHTML =
+      '<div class="et-counter">Step ' + (idx + 1) + ' / ' + steps.length + '</div>' +
+      '<div class="et-title">' + escapeHtml(step.title) + '</div>' +
+      '<div class="et-body">' + escapeHtml(step.body) + '</div>' +
+      '<div class="et-nav">' +
+        '<button id="et-prev"' + (isFirst ? ' disabled' : '') + '>Prev</button>' +
+        '<button id="et-next" class="primary">' + (isLast ? 'Done' : 'Next') + '</button>' +
+        '<button id="et-skip" class="text">Dismiss</button>' +
+      '</div>';
+    tt.querySelector('#et-prev').onclick = () => { if (idx > 0) { idx--; renderStep(); } };
+    tt.querySelector('#et-next').onclick = () => {
+      if (isLast) teardown();
+      else { idx++; renderStep(); }
+    };
+    tt.querySelector('#et-skip').onclick = teardown;
+  }
+
+  function renderStep() {
+    const step = steps[idx];
+    const switched = step.tabName ? clickTab(step.tabName) : false;
+    const delay = switched ? 220 : 0;
+
+    setTimeout(() => {
+      renderTooltip(step);
+      let target = null;
+      if (step.selector) target = visible(step.selector);
+      if (target) {
+        try { target.scrollIntoView({block: 'center', behavior: 'smooth'}); } catch (e) {}
+        setTimeout(() => positionAt(target), 260);
+      } else {
+        positionCentered();
+      }
+    }, delay);
+  }
+
+  function onResize() {
+    if (!pdoc.getElementById('energy-tour-cutout')) return;
+    const step = steps[idx];
+    let target = step.selector ? visible(step.selector) : null;
+    if (target) positionAt(target);
+    else positionCentered();
+  }
+  pwin.addEventListener('resize', onResize);
+  pwin.addEventListener('scroll', onResize, true);
+
+  function teardown() {
+    pwin.removeEventListener('resize', onResize);
+    pwin.removeEventListener('scroll', onResize, true);
+    cutout.remove();
+    tt.remove();
+    style.remove();
+    pwin.__energyTourDone = true;
+  }
+
+  renderStep();
+})();
+</script>
+"""
+    components_html(html.replace("__STEPS__", _TOUR_STEPS_JSON), height=0, width=0)
+
+
+# ---------------------------------------------------------------------------
 # Apply LLM scenario to main session state
 # ---------------------------------------------------------------------------
 
@@ -408,6 +691,8 @@ def app() -> None:
         "3-day energy forecast based on Oura daily data. "
         "Compare baseline vs scenario including uncertainty bands."
     )
+
+    render_spotlight_tour()
 
     personal_df, load_info = load_personal_dataframe()
     model_bundle = training_block()
